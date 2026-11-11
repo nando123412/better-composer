@@ -64,7 +64,7 @@ function usePitchTrack(): void {
 
     const sync = () => {
       const { stemUrls, jobKey } = useSeparationStore.getState();
-      const vocalsUrl = stemUrls.vocals ?? null;
+      const vocalsUrl = stemUrls.vocals ?? stemUrls.lead ?? null;
       if (!vocalsUrl) {
         cancelRunning();
         appliedVocalsUrl = null;
@@ -84,7 +84,7 @@ function usePitchTrack(): void {
 
     sync();
     const unsubscribeSeparation = useSeparationStore.subscribe((state, prev) => {
-      if (state.stemUrls.vocals !== prev.stemUrls.vocals) sync();
+      if (state.stemUrls.vocals !== prev.stemUrls.vocals || state.stemUrls.lead !== prev.stemUrls.lead) sync();
     });
     const unsubscribeTimeline = useTimelineStore.subscribe((state, prev) => {
       if (state.scrollLeft !== prev.scrollLeft || state.zoom !== prev.zoom) setFocusTime?.(viewportStartTime());
