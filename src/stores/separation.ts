@@ -215,6 +215,7 @@ const useSeparationStore = create<SeparationState & SeparationActions>((set, get
     const ready = await prepareStemImport(slot, file, set);
     if (!ready || !(await commitStemImport(slot, file, ready, set))) return false;
     await get().refreshForCurrentSource();
+    if (["vocals", "lead", "backing"].includes(slot) && useSettingsStore.getState().pitchLine === "off") { useSettingsStore.getState().set("pitchLine", "always"); }
     return true;
   },
 
@@ -224,6 +225,7 @@ const useSeparationStore = create<SeparationState & SeparationActions>((set, get
     set({ pendingImport: null });
     if (!(await commitStemImport(pending.slot, pending.file, pending, set))) return false;
     await get().refreshForCurrentSource();
+    if (["vocals", "lead", "backing"].includes(pending.slot) && useSettingsStore.getState().pitchLine === "off") { useSettingsStore.getState().set("pitchLine", "always"); }
     return true;
   },
 
