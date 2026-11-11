@@ -1,0 +1,147 @@
+import { scrubPreview } from "@/audio/scrub-preview";
+import { computeScrubVelocity, DEFAULT_SCRUB_OPTS, type ScrubSample } from "@/audio/scrub-velocity";
+import { holdFrames, subscribeFrame } from "@/lib/frame-loop";
+import { notePlacement } from "@/lib/replay-cue";
+import { xToTime } from "@/views/timeline/coords";
+import { computeEdgeScrollVelocity } from "@/views/timeline/edge-scroll";
+import { noteReplaySpot } from "@/views/timeline/replay-spot-signal";
+import { holdsSnapBypass } from "@/views/timeline/snap-bypass-key";
+import { GUTTER_WIDTH } from "@/views/timeline/timeline-store";
+import { readViewScroll, scrollViewBy, viewScrollLeft } from "@/views/timeline/view-scroll";
+
+// -- Types ---------------------------------------------------------------------
+
+interface PlayheadDragConfig {
+  getContainerRect: () => DOMRect | undefined;
+  getScrollContainer: () => HTMLElement | null;
+  getDuration: () => number;
+  getZoom: () => number;
+  getCurrentTime: () => number;
+  setIsPlaying: (playing: boolean) => void;
+  setDraggingPlayhead: (dragging: boolean, time?: number) => void;
+  setDragTime: (time: number) => void;
+  seekTo: (time: number) => void;
+  snapTime: (time: number, bypass: boolean) => number;
+}
+
+type DragStart = Pick<MouseEvent, "button" | "clientX" | "metaKey" | "ctrlKey" | "preventDefault">;
+
+interface PlayheadDrag {
+  onMouseDown: (e: DragStart, atPointer?: boolean) => void;
+  dispose: () => void;
+}
+
+// -- Constants -----------------------------------------------------------------
+
+const EDGE_SCROLL_ZONE = 60;
+const EDGE_SCROLL_MAX_SPEED = 22;
+const EDGE_SCROLL_LABEL = "playhead-edge-scroll";
+
+// -- Functions -----------------------------------------------------------------
+
+function createPlayheadDrag(config: PlayheadDragConfig): PlayheadDrag {
+  let activeCleanup: (() => void) | null = null;
+
+  const computeTimeFromPointer = (clientX: number): number | null => {
+    const parentRect = config.getContainerRect();
+    if (!parentRect) return null;
+    const container = config.getScrollContainer();
+    const scrollLeft = container ? readViewScroll(container).left : viewScrollLeft();
+    return Math.min(config.getDuration(), xToTime(clientX, parentRect, config.getZoom(), scrollLeft));
+  };
+
+  const onMouseDown = (e: DragStart, atPointer = false): void => {
+    if (e.button !== 0) return;
+
+    e.preventDefault();
+    config.setIsPlaying(false);
+    activeCleanup?.();
+
+    config.setDraggingPlayhead(true, config.getCurrentTime());
+
+    let pointerX = e.clientX;
+    let metaHeld = holdsSnapBypass(e);
+    let prevSample: ScrubSample | null = null;
+    let unsubscribeEdgeScroll: (() => void) | null = null;
+    const controller = new AbortController();
+    // Edge auto-scroll must keep running while the pointer is held still at the edge.
+    const releaseEdgeScrollFrames = holdFrames(EDGE_SCROLL_LABEL);
+
+    const tickScrubPreview = (time: number): void => {
+      const curr: ScrubSample = { time, wallClockMs: performance.now() };
+      const velocity = computeScrubVelocity(prevSample, curr, DEFAULT_SCRUB_OPTS);
+      prevSample = curr;
+      if (velocity > 0) scrubPreview.play(time, velocity);
+    };
+
+    const tickEdgeScroll = (): void => {
+      const container = config.getScrollContainer();
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const velocity = computeEdgeScrollVelocity({
+        pointerX,
+        contentLeft: rect.left + GUTTER_WIDTH,
+        contentRight: rect.right,
+        edgeSize: EDGE_SCROLL_ZONE,
+        maxSpeed: EDGE_SCROLL_MAX_SPEED,
+      });
+      if (velocity === 0) return;
+      scrollViewBy(container, velocity, 0);
+      const time = computeTimeFromPointer(pointerX);
+      if (time !== null) {
+        const snapped = config.snapTime(time, metaHeld);
+        config.setDragTime(snapped);
+        tickScrubPreview(snapped);
+      }
+    };
+
+    const handleMouseMove = (moveEvent: Pick<MouseEvent, "clientX" | "metaKey" | "ctrlKey">): void => {
+      metaHeld = holdsSnapBypass(moveEvent);
+      pointerX = moveEvent.clientX;
+      const time = computeTimeFromPointer(pointerX);
+      if (time !== null) {
+        const snapped = config.snapTime(time, metaHeld);
+        config.setDragTime(snapped);
+        tickScrubPreview(snapped);
+      }
+    };
+
+    const cleanup = (): void => {
+      unsubscribeEdgeScroll?.();
+      unsubscribeEdgeScroll = null;
+      releaseEdgeScrollFrames();
+      controller.abort();
+      scrubPreview.stop();
+      config.setDraggingPlayhead(false);
+      activeCleanup = null;
+    };
+
+    const handleMouseUp = (upEvent: MouseEvent): void => {
+      const time = computeTimeFromPointer(upEvent.clientX);
+      if (time !== null) {
+        const target = config.snapTime(time, holdsSnapBypass(upEvent));
+        config.seekTo(target);
+        notePlacement(target, "pointer");
+        noteReplaySpot(target);
+      }
+      cleanup();
+    };
+
+    activeCleanup = cleanup;
+    document.addEventListener("mousemove", handleMouseMove, { signal: controller.signal });
+    document.addEventListener("mouseup", handleMouseUp, { signal: controller.signal });
+    unsubscribeEdgeScroll = subscribeFrame(tickEdgeScroll, EDGE_SCROLL_LABEL);
+    if (atPointer) handleMouseMove(e);
+  };
+
+  const dispose = (): void => {
+    activeCleanup?.();
+  };
+
+  return { onMouseDown, dispose };
+}
+
+// -- Exports -------------------------------------------------------------------
+
+export { createPlayheadDrag };
+export type { PlayheadDragConfig };

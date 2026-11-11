@@ -1,0 +1,1 @@
+../../../../../../tmp/better-composer-node-modules/.pnpm/wavesurfer.js@7.12.12/node_modules/wavesurfer.js

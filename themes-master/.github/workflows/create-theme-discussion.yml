@@ -1,0 +1,70 @@
+name: Create Theme Discussion
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'index.json'
+  workflow_dispatch:
+
+jobs:
+  create-discussion:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      discussions: write
+
+    steps:
+      - name: Checkout current
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get new themes
+        id: new-themes
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Find the commit where index.json was last modified
+            LAST_COMMIT=$(git log -1 --format="%H" -- index.json)
+            PREV_COMMIT=$(git log -1 --format="%H" "${LAST_COMMIT}^" -- index.json 2>/dev/null || echo "")
+
+            if [ -n "$PREV_COMMIT" ]; then
+              git show "${PREV_COMMIT}:index.json" > old_index.json 2>/dev/null
+            else
+              echo '{"themes":[]}' > old_index.json
+            fi
+          else
+            git show HEAD~1:index.json > old_index.json 2>/dev/null
+          fi
+
+          jq empty old_index.json 2>/dev/null || echo '{"themes":[]}' > old_index.json
+          jq -r '.themes[].repo' old_index.json | sort > old_themes.txt
+          jq -r '.themes[].repo' index.json | sort > new_themes.txt
+          NEW_THEMES=$(comm -13 old_themes.txt new_themes.txt | tr '\n' ' ')
+          echo "themes=$NEW_THEMES" >> $GITHUB_OUTPUT
+
+      - name: Generate app token
+        if: steps.new-themes.outputs.themes != ''
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Get repository node ID
+        if: steps.new-themes.outputs.themes != ''
+        id: repo-id
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          REPO_NODE_ID=$(gh repo view --json id --jq '.id')
+          echo "node_id=$REPO_NODE_ID" >> $GITHUB_OUTPUT
+
+      - name: Create discussions for new themes
+        if: steps.new-themes.outputs.themes != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          chmod +x .github/scripts/create-discussion.sh
+          .github/scripts/create-discussion.sh "${{ steps.new-themes.outputs.themes }}" "${{ steps.repo-id.outputs.node_id }}" "${{ secrets.DISCUSSION_CATEGORY_ID }}"

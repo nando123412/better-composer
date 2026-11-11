@@ -1,0 +1,14 @@
+{
+  "id": "colorful-vocals",
+  "title": "Colorful Vocals",
+  "creators": [
+    "adaliea"
+  ],
+  "minVersion": "2.0.5.6",
+  "hasShaders": true,
+  "version": "1.0.0",
+  "tags": ["colorful"],
+  "images": [
+    "preview.png"
+  ]
+}

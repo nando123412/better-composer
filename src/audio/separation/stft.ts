@@ -1,0 +1,270 @@
+const N_FFT = 4096;
+const HOP_LENGTH = 1024;
+const WIN_LENGTH = N_FFT;
+
+interface StftFraming {
+  fftSize?: number;
+  hop?: number;
+  firstFrame?: number;
+  frameCount?: number;
+}
+
+// Periodic Hann window: divisor is `size` (not `size - 1`). Matches PyTorch's
+// `torch.hann_window(size, periodic=True)`, which is what `torch.stft` uses by
+// default. The symmetric variant (divisor `size - 1`) introduces a small but
+// consistent shape error across every frame that gets amplified through the
+// HTDemucs magnitude branch — audible as distortion in the separated stems.
+const hannWindows = new Map<number, Float32Array>();
+
+function hannWindow(size: number): Float32Array {
+  const cached = hannWindows.get(size);
+  if (cached) return cached;
+  const w = new Float32Array(size);
+  for (let i = 0; i < size; i++) {
+    w[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / size));
+  }
+  hannWindows.set(size, w);
+  return w;
+}
+
+// Recomputing cos/sin per butterfly dominated per-chunk CPU time, so build the plan once per length.
+interface FftPlan {
+  bitReversed: Uint32Array;
+  cos: Float64Array;
+  sin: Float64Array;
+}
+
+const fftPlans = new Map<number, FftPlan>();
+
+function getFftPlan(n: number): FftPlan {
+  const cached = fftPlans.get(n);
+  if (cached) return cached;
+
+  const bits = Math.log2(n);
+  if (!Number.isInteger(bits)) throw new Error("FFT length must be power of 2");
+
+  const bitReversed = new Uint32Array(n);
+  for (let i = 0; i < n; i++) {
+    let reversed = 0;
+    let v = i;
+    for (let b = 0; b < bits; b++) {
+      reversed = (reversed << 1) | (v & 1);
+      v >>>= 1;
+    }
+    bitReversed[i] = reversed;
+  }
+
+  // w_k = exp(-2*pi*i*k/n) for k < n/2; a stage of size `size` uses every (n/size)-th entry.
+  const cos = new Float64Array(n / 2);
+  const sin = new Float64Array(n / 2);
+  for (let k = 0; k < n / 2; k++) {
+    const angle = (-2 * Math.PI * k) / n;
+    cos[k] = Math.cos(angle);
+    sin[k] = Math.sin(angle);
+  }
+
+  const plan = { bitReversed, cos, sin };
+  fftPlans.set(n, plan);
+  return plan;
+}
+
+function fftRadix2(real: Float32Array, imag: Float32Array): void {
+  const n = real.length;
+  const { bitReversed, cos, sin } = getFftPlan(n);
+
+  for (let i = 0; i < n; i++) {
+    const j = bitReversed[i];
+    if (j > i) {
+      const tr = real[i];
+      real[i] = real[j];
+      real[j] = tr;
+      const ti = imag[i];
+      imag[i] = imag[j];
+      imag[j] = ti;
+    }
+  }
+
+  for (let size = 2; size <= n; size *= 2) {
+    const halfsize = size / 2;
+    const tableStep = n / size;
+    for (let i = 0; i < n; i += size) {
+      for (let k = 0; k < halfsize; k++) {
+        const wr = cos[k * tableStep];
+        const wi = sin[k * tableStep];
+        const idx = i + k;
+        const jdx = idx + halfsize;
+        const tr = wr * real[jdx] - wi * imag[jdx];
+        const ti = wr * imag[jdx] + wi * real[jdx];
+        real[jdx] = real[idx] - tr;
+        imag[jdx] = imag[idx] - ti;
+        real[idx] += tr;
+        imag[idx] += ti;
+      }
+    }
+  }
+}
+
+function ifftRadix2(real: Float32Array, imag: Float32Array): void {
+  const n = real.length;
+  for (let i = 0; i < n; i++) imag[i] = -imag[i];
+  fftRadix2(real, imag);
+  const invN = 1 / n;
+  for (let i = 0; i < n; i++) {
+    real[i] *= invN;
+    imag[i] = -imag[i] * invN;
+  }
+}
+
+interface Spectrogram {
+  real: Float32Array;
+  imag: Float32Array;
+  numFrames: number;
+  numBins: number;
+}
+
+function reflectPad(signal: Float32Array, padLeft: number, padRight: number): Float32Array {
+  const out = new Float32Array(signal.length + padLeft + padRight);
+  out.set(signal, padLeft);
+  // Left reflect: out[padLeft - 1 - i] = signal[1 + i]  (mirror around index 0)
+  for (let i = 0; i < padLeft; i++) {
+    const src = i + 1;
+    out[padLeft - 1 - i] = signal[src < signal.length ? src : signal.length - 1];
+  }
+  // Right reflect: out[padLeft + signal.length + i] = signal[signal.length - 2 - i]
+  for (let i = 0; i < padRight; i++) {
+    const src = signal.length - 2 - i;
+    out[padLeft + signal.length + i] = signal[src >= 0 ? src : 0];
+  }
+  return out;
+}
+
+interface StftOptions {
+  /** Center-pad the signal (reflect, n_fft/2 each side) before framing. Default true. */
+  center?: boolean;
+  /** Divide each complex coefficient by sqrt(n_fft). Default false. */
+  normalized?: boolean;
+}
+
+function stftFrameCount(signalLength: number, center = true, framing: StftFraming = {}): number {
+  const { fftSize = N_FFT, hop = HOP_LENGTH } = framing;
+  const framedLength = center ? signalLength + fftSize : signalLength;
+  return 1 + Math.floor((framedLength - fftSize) / hop);
+}
+
+type StftFrameVisitor = (frame: number, real: Float32Array, imag: Float32Array) => void;
+
+// Same samples as reflectPad, read in place so a frame range never copies the whole signal.
+function centeredSample(signal: Float32Array, index: number): number {
+  if (index < 0) {
+    const src = -index;
+    return signal[src < signal.length ? src : signal.length - 1];
+  }
+  if (index >= signal.length) {
+    const src = 2 * signal.length - 2 - index;
+    return signal[src >= 0 ? src : 0];
+  }
+  return signal[index];
+}
+
+function forEachStftFrame(
+  signal: Float32Array,
+  onFrame: StftFrameVisitor,
+  center = true,
+  framing: StftFraming = {},
+): void {
+  const { fftSize = N_FFT, hop = HOP_LENGTH, firstFrame = 0 } = framing;
+  const window = hannWindow(fftSize);
+  const totalFrames = stftFrameCount(signal.length, center, framing);
+  const lastFrame = Math.min(totalFrames, firstFrame + (framing.frameCount ?? totalFrames));
+  const offset = center ? fftSize / 2 : 0;
+  const frameReal = new Float32Array(fftSize);
+  const frameImag = new Float32Array(fftSize);
+
+  for (let f = firstFrame; f < lastFrame; f++) {
+    const start = f * hop - offset;
+    if (start >= 0 && start + fftSize <= signal.length) {
+      for (let i = 0; i < fftSize; i++) frameReal[i] = signal[start + i] * window[i];
+    } else {
+      for (let i = 0; i < fftSize; i++) frameReal[i] = centeredSample(signal, start + i) * window[i];
+    }
+    frameImag.fill(0);
+    fftRadix2(frameReal, frameImag);
+    onFrame(f, frameReal, frameImag);
+  }
+}
+
+function stft(signal: Float32Array, opts: StftOptions = {}): Spectrogram {
+  const { center = true, normalized = false } = opts;
+  const numFrames = stftFrameCount(signal.length, center);
+  const numBins = N_FFT / 2 + 1;
+  const real = new Float32Array(numFrames * numBins);
+  const imag = new Float32Array(numFrames * numBins);
+  const scale = normalized ? 1 / Math.sqrt(N_FFT) : 1;
+
+  forEachStftFrame(
+    signal,
+    (f, frameReal, frameImag) => {
+      for (let b = 0; b < numBins; b++) {
+        real[f * numBins + b] = frameReal[b] * scale;
+        imag[f * numBins + b] = frameImag[b] * scale;
+      }
+    },
+    center,
+  );
+
+  return { real, imag, numFrames, numBins };
+}
+
+interface IstftOptions {
+  /** Invert coefficients produced with normalized=true. Default false. */
+  normalized?: boolean;
+}
+
+// The window is as long as the FFT, so `fftSize` sets both.
+function istft(
+  spec: Spectrogram,
+  outputLength: number,
+  opts: IstftOptions = {},
+  framing: Pick<StftFraming, "fftSize" | "hop"> = {},
+): Float32Array {
+  const { normalized = false } = opts;
+  const { fftSize = WIN_LENGTH, hop = HOP_LENGTH } = framing;
+  const window = hannWindow(fftSize);
+  const halfWin = fftSize / 2;
+  const paddedLength = outputLength + fftSize;
+  const out = new Float32Array(paddedLength);
+  const norm = new Float32Array(paddedLength);
+
+  const frameReal = new Float32Array(fftSize);
+  const frameImag = new Float32Array(fftSize);
+  const scale = normalized ? Math.sqrt(fftSize) : 1;
+
+  for (let f = 0; f < spec.numFrames; f++) {
+    frameReal.fill(0);
+    frameImag.fill(0);
+    for (let b = 0; b < spec.numBins; b++) {
+      frameReal[b] = spec.real[f * spec.numBins + b];
+      frameImag[b] = spec.imag[f * spec.numBins + b];
+    }
+    for (let b = 1; b < spec.numBins - 1; b++) {
+      frameReal[fftSize - b] = frameReal[b];
+      frameImag[fftSize - b] = -frameImag[b];
+    }
+    ifftRadix2(frameReal, frameImag);
+    const start = f * hop;
+    for (let i = 0; i < fftSize; i++) {
+      out[start + i] += frameReal[i] * scale * window[i];
+      norm[start + i] += window[i] * window[i];
+    }
+  }
+
+  const result = new Float32Array(outputLength);
+  for (let i = 0; i < outputLength; i++) {
+    const idx = i + halfWin;
+    result[i] = norm[idx] > 1e-8 ? out[idx] / norm[idx] : 0;
+  }
+  return result;
+}
+
+export { N_FFT, HOP_LENGTH, reflectPad, stft, stftFrameCount, forEachStftFrame, istft };
+export type { Spectrogram };

@@ -1,0 +1,16 @@
+{
+  "repo": "a-dogann/-ADNEXTGEN-THEME",
+  "id": "ad-nextgen",
+  "version": "1.0.1",
+  "commit": "fff5dac14208d2511b5cbdfe8d25ec86e759311a",
+  "integrity": "sha256-d7d2425b1c3ad19c2901e65e5e9d85616c3df89aaa9dd5b53e6fa85b038af2a2",
+  "locked": "2026-09-19T16:44:45Z",
+  "builds": [
+    {
+      "version": "1.0.1",
+      "minVersion": "1.0.0",
+      "path": "themes/ad-nextgen",
+      "integrity": "sha256-d7d2425b1c3ad19c2901e65e5e9d85616c3df89aaa9dd5b53e6fa85b038af2a2"
+    }
+  ]
+}

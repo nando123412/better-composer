@@ -1,0 +1,42 @@
+import { isAnyModalOpen } from "@/stores/escape-layer-stack";
+import { getEffectiveBinding } from "@/stores/shortcut-bindings";
+import { findMatchingShortcut, isCommandBinding } from "@/utils/shortcut-matcher";
+import { isTypingTarget } from "@/utils/typing-target";
+import { useEffect, useEffectEvent } from "react";
+
+// -- Types --------------------------------------------------------------------
+
+type ShortcutActions = Partial<Record<string, () => void>>;
+
+interface ShortcutOptions {
+  enabled?: boolean;
+}
+
+// -- Hook ---------------------------------------------------------------------
+
+function useKeyboardShortcuts(actions: ShortcutActions, options: ShortcutOptions = {}): void {
+  const { enabled = true } = options;
+
+  const handleKeyDown = useEffectEvent((event: KeyboardEvent) => {
+    if (!enabled) return;
+    if (isAnyModalOpen()) return;
+
+    const id = findMatchingShortcut(event, "global");
+    const action = id === null ? undefined : actions[id];
+    if (!id || !action) return;
+
+    const binding = getEffectiveBinding(id);
+    if (isTypingTarget(event.target) && !isCommandBinding(binding)) return;
+
+    event.preventDefault();
+    action();
+  });
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => handleKeyDown(event);
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+}
+
+export { isTypingTarget, useKeyboardShortcuts };

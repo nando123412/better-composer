@@ -1,0 +1,124 @@
+import { GuideCode } from "@/pages/guides/guide-code";
+
+const TtmlVsLrcContent: React.FC = () => (
+  <>
+    <p>
+      TTML and LRC are both formats for synchronized lyrics. They look very different and solve slightly different
+      problems. This guide covers how they compare, when to use each, and how to convert between them.
+    </p>
+
+    <h2 className="text-2xl font-semibold text-composer-text mt-10 mb-4">Quick comparison</h2>
+    <div className="overflow-x-auto overscroll-x-none my-6">
+      <table className="w-full text-sm border border-(--divider) rounded-lg">
+        <thead className="bg-(--layer-1)">
+          <tr>
+            <th className="text-left px-4 py-3 font-semibold text-composer-text border-b border-(--divider)">
+              Feature
+            </th>
+            <th className="text-left px-4 py-3 font-semibold text-composer-text border-b border-(--divider)">LRC</th>
+            <th className="text-left px-4 py-3 font-semibold text-composer-text border-b border-(--divider)">TTML</th>
+          </tr>
+        </thead>
+        <tbody className="text-composer-text-secondary">
+          <tr>
+            <td className="px-4 py-3 border-b border-(--divider)">File format</td>
+            <td className="px-4 py-3 border-b border-(--divider)">Plain text</td>
+            <td className="px-4 py-3 border-b border-(--divider)">XML</td>
+          </tr>
+          <tr>
+            <td className="px-4 py-3 border-b border-(--divider)">Line timing</td>
+            <td className="px-4 py-3 border-b border-(--divider)">Yes</td>
+            <td className="px-4 py-3 border-b border-(--divider)">Yes</td>
+          </tr>
+          <tr>
+            <td className="px-4 py-3 border-b border-(--divider)">Word timing</td>
+            <td className="px-4 py-3 border-b border-(--divider)">Only in enhanced LRC</td>
+            <td className="px-4 py-3 border-b border-(--divider)">Yes, native</td>
+          </tr>
+          <tr>
+            <td className="px-4 py-3 border-b border-(--divider)">Multiple singers</td>
+            <td className="px-4 py-3 border-b border-(--divider)">No</td>
+            <td className="px-4 py-3 border-b border-(--divider)">Yes, via ttm:agent</td>
+          </tr>
+          <tr>
+            <td className="px-4 py-3 border-b border-(--divider)">Background vocals</td>
+            <td className="px-4 py-3 border-b border-(--divider)">No</td>
+            <td className="px-4 py-3 border-b border-(--divider)">Yes, via ttm:role x-bg</td>
+          </tr>
+          <tr>
+            <td className="px-4 py-3">Used by</td>
+            <td className="px-4 py-3">Desktop players, legacy apps</td>
+            <td className="px-4 py-3">Apple Music, Spotify, Amazon Music</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 className="text-2xl font-semibold text-composer-text mt-10 mb-4">What LRC looks like</h2>
+    <p>LRC puts a timestamp in square brackets at the start of each line. That is almost all there is to it.</p>
+    <GuideCode
+      code={`[ti:Song title]
+[ar:Artist]
+[00:12.34]First lyric line
+[00:15.67]Second lyric line`}
+    />
+    <p>
+      Enhanced LRC (eLRC) adds inline per-word timestamps in angle brackets. The line-level timestamp stays, and each
+      word gets a start time:
+    </p>
+    <GuideCode code={"[00:12.34]<00:12.34>First <00:12.80>lyric <00:13.20>line<00:13.80>"} />
+
+    <h2 className="text-2xl font-semibold text-composer-text mt-10 mb-4">What TTML looks like</h2>
+    <p>TTML is XML. The same two lines above become:</p>
+    <GuideCode
+      format="ttml"
+      code={`<p begin="00:00:12.340" end="00:00:15.670">
+  <span begin="00:00:12.340" end="00:00:12.800">First</span>
+  <span begin="00:00:12.800" end="00:00:13.200">lyric</span>
+  <span begin="00:00:13.200" end="00:00:13.800">line</span>
+</p>`}
+    />
+    <p>
+      The structure is richer. TTML wraps each line in a{" "}
+      <code className="font-mono text-composer-accent-text">&lt;p&gt;</code> element that can carry an agent, nest
+      background vocals, and hold per-word spans with their own timing.
+    </p>
+
+    <h2 className="text-2xl font-semibold text-composer-text mt-10 mb-4">When to use LRC</h2>
+    <p>
+      Stick with LRC when the target is a desktop player, a legacy app, or an internal tool that only needs line-level
+      sync. LRC is easy to hand-edit, easy to diff in git, and easy for non-technical people to scan.
+    </p>
+    <p>
+      LRC also works well as an intermediate format while you capture timing. Many authors prefer to rough out timing in
+      LRC, then convert to TTML for delivery.
+    </p>
+
+    <h2 className="text-2xl font-semibold text-composer-text mt-10 mb-4">When to use TTML</h2>
+    <p>
+      Pick TTML when the target is Apple Music, Spotify, Amazon Music, or any service that animates lyrics word by word.
+      TTML is also the right choice when the song has multiple singers, background vocals, or call-and-response parts.
+    </p>
+    <p>
+      If you need to ship a file that travels through a music distributor to a streaming platform, it is almost always
+      going to be TTML.
+    </p>
+
+    <h2 className="text-2xl font-semibold text-composer-text mt-10 mb-4">Converting between them</h2>
+    <p>
+      Going from LRC or eLRC to TTML is common and lossless: line-level timing becomes{" "}
+      <code className="font-mono text-composer-accent-text">&lt;p&gt;</code> elements, inline word timestamps become
+      nested <code className="font-mono text-composer-accent-text">&lt;span&gt;</code> elements. Use the{" "}
+      <a href="/lrc-to-ttml" className="text-composer-accent-text hover:text-composer-accent">
+        LRC to TTML converter
+      </a>{" "}
+      for a one-step conversion.
+    </p>
+    <p>
+      Going from TTML back to LRC loses information: agents, background vocals, and nested structure do not fit into
+      LRC. If you need LRC for legacy compatibility, the conversion is possible but you have to accept the loss.
+    </p>
+  </>
+);
+
+export default TtmlVsLrcContent;

@@ -1,0 +1,76 @@
+name: Resolve Discussion Links
+
+# Writes each theme's discussion number into its per-theme
+# "themes/<id>/discussion.json" by matching the source repo embedded in each
+# discussion body to the theme repos in themes/*/build.json. Runs when
+# discussions change, on a daily schedule (to re-heal missed events), and on
+# demand. The committed changes trigger the regen workflow, which rebuilds the
+# aggregate lockfile from the per-theme files; this workflow never touches it.
+
+on:
+  discussion:
+    types: [created, edited, deleted, transferred]
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+# Serialize discussion resolution against itself. Writes are now disjoint
+# per-theme discussion.json files, so this no longer needs to share the
+# vendoring lock.
+concurrency:
+  group: resolve-discussions
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      discussions: read
+
+    steps:
+      - name: Generate App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Fetch discussions
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: bash .github/scripts/fetch-discussions.sh "${{ github.repository }}" > discussions.json
+
+      - name: Resolve discussions
+        run: |
+          node .github/scripts/resolve-discussions.mjs < discussions.json
+
+      # https://github.com/planetscale/ghcommit-action/issues/43#issuecomment-2313129696
+      - name: Stage changes
+        id: stage
+        run: |
+          rm -f discussions.json
+          git add -A themes/
+          git diff --staged --quiet || echo "has_changes=true" >> $GITHUB_OUTPUT
+
+      - name: Commit and push changes
+        if: steps.stage.outputs.has_changes == 'true'
+        uses: planetscale/ghcommit-action@v0.2.19
+        with:
+          commit_message: "chore: resolve discussion links"
+          repo: ${{ github.repository }}
+          branch: master
+          file_pattern: themes
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}

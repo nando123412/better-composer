@@ -1,0 +1,32 @@
+{
+    "layout": {
+        "pos": 0,
+        "type": "heading",
+        "label": "Layout"
+    },
+    "layout-placement": {
+        "pos": 1,
+        "type": "dropdown",
+        "label": "Which side the layout should be placed at",
+        "options": [
+            { "label": "Right (default)", "value": "right" },
+            { "label": "Left", "value": "left" }
+        ],
+        "attribute": "placement",
+        "attrType": "rics",
+        "default": 0
+    },
+    "album-cover": {
+        "pos": 2,
+        "type": "heading",
+        "label": "Album Cover"
+    },
+    "album-cover-border-radius": {
+        "pos": 3,
+        "type": "textfield",
+        "label": "Border radius of the album cover",
+        "attribute": "album-cover-border-radius",
+        "attrType": "rics",
+        "default": "2rem"
+    }
+}

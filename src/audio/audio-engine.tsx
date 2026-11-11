@@ -1,0 +1,290 @@
+import { useEffect, useRef } from "react";
+import { decodeAudioToWav, needsWavConversion } from "@/audio/audio-decode";
+import { fadeAudioVolume } from "@/audio/audio-fade";
+import { bindAudioStateEvents } from "@/audio/audio-state-events";
+import { stemMixGain, syncStemMix } from "@/audio/mix-audio";
+import { resyncPlaybackClock } from "@/audio/playback-clock";
+import { notePlaybackTime } from "@/audio/playback-ranges";
+import { scrubStemRouter } from "@/audio/scrub-stem-router";
+import { seekInPlaceToResume } from "@/audio/seek-reveal-intent";
+import { useAudioStore } from "@/stores/audio";
+import { useProjectStore } from "@/stores/project";
+import { useSeparationStore } from "@/stores/separation";
+import { useSettingsStore } from "@/stores/settings";
+import { BROWSER_KIND } from "@/utils/platform";
+
+// -- Constants -----------------------------------------------------------------
+
+const LOG_PREFIX = "[AudioEngine]";
+const SLOW_DECODE_MS = 800;
+
+// -- Helpers -------------------------------------------------------------------
+
+// A rejected play() (autoplay policy, undecodable source) must not leave the UI showing Pause.
+function playOrRevert(audio: HTMLAudioElement, setIsPlaying: (playing: boolean) => void): void {
+  if (BROWSER_KIND === "chromium" && audio.paused && !audio.seeking) seekInPlaceToResume(audio);
+  audio.play().catch(() => {
+    if (audio.paused) setIsPlaying(false);
+  });
+}
+
+// -- Component -----------------------------------------------------------------
+
+const AudioEngine: React.FC = () => {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const originalUrlRef = useRef<string | null>(null);
+  const stemSwitchRef = useRef(0);
+  const switchingStemRef = useRef(false);
+
+  const source = useAudioStore((s) => s.source);
+  const isPlaying = useAudioStore((s) => s.isPlaying);
+  const playbackRate = useAudioStore((s) => s.playbackRate);
+  const preservePitch = useSettingsStore((s) => s.preservePitch);
+  const volume = useAudioStore((s) => s.volume);
+  const isMuted = useAudioStore((s) => s.isMuted);
+  const audioElement = useAudioStore((s) => s.audioElement);
+  const setCurrentTime = useAudioStore((s) => s.setCurrentTime);
+  const setDuration = useAudioStore((s) => s.setDuration);
+  const setIsPlaying = useAudioStore((s) => s.setIsPlaying);
+  const setIsLoading = useAudioStore((s) => s.setIsLoading);
+  const registerAudioElement = useAudioStore((s) => s.registerAudioElement);
+
+  const currentStem = useSeparationStore((s) => s.currentStem);
+  const mixStems = useSeparationStore((s) => s.mixStems);
+  const availableStems = useSeparationStore((s) => s.availableStems);
+  const stemUrls = useSeparationStore((s) => s.stemUrls);
+  const mixCompanionCount = mixStems.filter((stem) => stem !== currentStem && stemUrls[stem]).length;
+  const mixedVolume = stemMixGain(volume, mixCompanionCount);
+
+  // react-doctor-disable-next-line react-doctor/effect-needs-cleanup -- teardown/clearSlowLoading run from the returned cleanup and revoke every listener, timer and object URL; the async setup() indirection hides that from static analysis
+  useEffect(() => {
+    if (!source) {
+      registerAudioElement(null);
+      scrubStemRouter.clearCache();
+      return;
+    }
+
+    const playableFile = source.type === "file" ? source.file : source.type === "youtube" ? source.file : null;
+    if (!playableFile) {
+      registerAudioElement(null);
+      scrubStemRouter.clearCache();
+      return;
+    }
+
+    let aborted = false;
+    let teardown: (() => void) | null = null;
+    let slowTimer: number | null = null;
+    let didSetLoading = false;
+
+    const clearSlowLoading = () => {
+      if (slowTimer !== null) {
+        window.clearTimeout(slowTimer);
+        slowTimer = null;
+      }
+      if (didSetLoading) {
+        didSetLoading = false;
+        setIsLoading(false);
+      }
+    };
+
+    // mp3 and raw aac seek slowly because the streaming decoder has no
+    // reliable frame index. Decoding to uncompressed WAV up front gives the
+    // <audio> element an O(1)-seekable source. Other inputs (opus, webm,
+    // m4a-with-mp4-container, ogg) already seek fine.
+    const resolvePlaybackUrl = async (): Promise<{ url: string; stripped: boolean | null }> => {
+      if (!needsWavConversion(playableFile)) {
+        return { url: URL.createObjectURL(playableFile), stripped: true };
+      }
+      slowTimer = window.setTimeout(() => {
+        slowTimer = null;
+        didSetLoading = true;
+        setIsLoading(true);
+      }, SLOW_DECODE_MS);
+      try {
+        const wavBlob = await decodeAudioToWav(playableFile);
+        return { url: URL.createObjectURL(wavBlob), stripped: true };
+      } catch (err) {
+        console.warn(LOG_PREFIX, "audio decode failed, using original file", err);
+        return { url: URL.createObjectURL(playableFile), stripped: null };
+      }
+    };
+
+    scrubStemRouter.setOriginalSource(playableFile);
+
+    const setup = async () => {
+      let objectUrl: string;
+      let stripped: boolean | null;
+      try {
+        ({ url: objectUrl, stripped } = await resolvePlaybackUrl());
+      } finally {
+        clearSlowLoading();
+      }
+      if (aborted) {
+        URL.revokeObjectURL(objectUrl);
+        return;
+      }
+
+      const audio = new Audio();
+      audio.id = "composer-audio";
+      audio.src = objectUrl;
+      const {
+        playbackRate: initialPlaybackRate,
+        volume: initialVolume,
+        isMuted: initialIsMuted,
+        isPlaying: initialIsPlaying,
+        currentTime: initialCurrentTime,
+      } = useAudioStore.getState();
+      audio.playbackRate = initialPlaybackRate;
+      audio.preservesPitch = useSettingsStore.getState().preservePitch;
+      audio.volume = initialVolume;
+      audio.muted = initialIsMuted;
+      if (initialCurrentTime > 0) audio.currentTime = initialCurrentTime;
+      audio.style.display = "none";
+      document.body.appendChild(audio);
+      audioRef.current = audio;
+      originalUrlRef.current = objectUrl;
+      registerAudioElement(audio);
+      if (stripped !== null) useProjectStore.getState().setPrimingStripped(stripped);
+      if (initialIsPlaying) playOrRevert(audio, setIsPlaying);
+
+      const handleLoadedMetadata = () => setDuration(audio.duration);
+      const handleTimeUpdate = () => setCurrentTime(audio.currentTime);
+      const handleEnded = () => setIsPlaying(false);
+      const handleError = (e: Event) => {
+        console.error(LOG_PREFIX, "Audio error:", e);
+      };
+
+      audio.addEventListener("loadedmetadata", handleLoadedMetadata);
+      audio.addEventListener("timeupdate", handleTimeUpdate);
+      audio.addEventListener("timeupdate", notePlaybackTime);
+      audio.addEventListener("seeking", notePlaybackTime);
+      audio.addEventListener("ended", handleEnded);
+      audio.addEventListener("error", handleError);
+      audio.addEventListener("seeking", resyncPlaybackClock);
+      const unbindStateEvents = bindAudioStateEvents(audio, () => useAudioStore.getState().isPlaying, setIsPlaying);
+
+      teardown = () => {
+        audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
+        audio.removeEventListener("timeupdate", handleTimeUpdate);
+        audio.removeEventListener("timeupdate", notePlaybackTime);
+        audio.removeEventListener("seeking", notePlaybackTime);
+        audio.removeEventListener("ended", handleEnded);
+        audio.removeEventListener("error", handleError);
+        audio.removeEventListener("seeking", resyncPlaybackClock);
+        unbindStateEvents();
+        audio.pause();
+        audio.src = "";
+        audio.remove();
+        if (audioRef.current === audio) audioRef.current = null;
+        if (originalUrlRef.current === objectUrl) originalUrlRef.current = null;
+        URL.revokeObjectURL(objectUrl);
+      };
+    };
+
+    void setup();
+
+    return () => {
+      aborted = true;
+      clearSlowLoading();
+      if (teardown) teardown();
+      registerAudioElement(null);
+      scrubStemRouter.clearCache();
+    };
+  }, [source, setDuration, setCurrentTime, setIsPlaying, setIsLoading, registerAudioElement]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (isPlaying) {
+      playOrRevert(audio, setIsPlaying);
+    } else {
+      audio.pause();
+    }
+  }, [isPlaying, setIsPlaying]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.playbackRate = playbackRate;
+    audio.preservesPitch = preservePitch;
+    if (!switchingStemRef.current) audio.volume = mixedVolume;
+    audio.muted = isMuted;
+  }, [playbackRate, preservePitch, mixedVolume, isMuted]);
+
+  useEffect(() => {
+    const audio = audioElement;
+    if (!audio) return;
+    const stemUrl = currentStem !== "original" ? stemUrls[currentStem] : null;
+    const targetUrl = stemUrl ?? originalUrlRef.current;
+    if (!targetUrl || audio.src === targetUrl) return;
+    const wasPlaying = !audio.paused;
+    const time = audio.currentTime;
+    const switchId = ++stemSwitchRef.current;
+    switchingStemRef.current = true;
+    const {
+      playbackRate: currentPlaybackRate,
+      volume: currentVolume,
+      isMuted: currentIsMuted,
+    } = useAudioStore.getState();
+    const currentMix = useSeparationStore.getState().mixStems;
+    const companions = currentMix.filter(
+      (stem) => stem !== currentStem && useSeparationStore.getState().stemUrls[stem],
+    ).length;
+    const targetVolume = stemMixGain(currentVolume, companions);
+    const switchSource = () => {
+      if (switchId !== stemSwitchRef.current) return;
+      audio.removeEventListener("canplay", switchSource);
+      audio.currentTime = time;
+      audio.playbackRate = currentPlaybackRate;
+      audio.muted = currentIsMuted;
+      if (wasPlaying) {
+        audio
+          .play()
+          .then(() => {
+            if (switchId === stemSwitchRef.current) {
+              void fadeAudioVolume(audio, targetVolume, 100).then(() => {
+                if (switchId === stemSwitchRef.current) switchingStemRef.current = false;
+              });
+            }
+          })
+          .catch(() => {
+            if (switchId === stemSwitchRef.current) switchingStemRef.current = false;
+            setIsPlaying(false);
+          });
+      } else {
+        audio.volume = targetVolume;
+        switchingStemRef.current = false;
+      }
+    };
+    void fadeAudioVolume(audio, 0, 80).then(() => {
+      if (switchId !== stemSwitchRef.current) return;
+      audio.addEventListener("canplay", switchSource, { once: true });
+      audio.src = targetUrl;
+      audio.currentTime = time;
+      if (audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) switchSource();
+    });
+  }, [currentStem, stemUrls, audioElement, setIsPlaying]);
+
+  useEffect(() => {
+    if (!audioElement) return;
+    const companions = availableStems.filter((stem) => stem !== "original" && stem !== currentStem && stemUrls[stem]);
+    return syncStemMix({
+      master: audioElement,
+      primary: currentStem,
+      stems: companions,
+      audibleStems: mixStems,
+      urls: stemUrls,
+    });
+  }, [audioElement, currentStem, mixStems, availableStems, stemUrls]);
+
+  useEffect(() => {
+    scrubStemRouter.selectStem(currentStem, (stem) => stemUrls[stem]);
+  }, [currentStem, stemUrls]);
+
+  return null;
+};
+
+// -- Exports -------------------------------------------------------------------
+
+export { AudioEngine };

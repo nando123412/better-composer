@@ -1,0 +1,68 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
+  "formatter": {
+    "enabled": true,
+    "formatWithErrors": false,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineEnding": "lf",
+    "lineWidth": 120,
+    "attributePosition": "auto"
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedVariables": "error",
+        "useHookAtTopLevel": "off",
+        "noUnsafeOptionalChaining": "off",
+        "noVoidTypeReturn": "off"
+      },
+      "style": {
+        "useConst": "error",
+        "noNonNullAssertion": "off",
+        "noDescendingSpecificity": "off"
+      },
+      "suspicious": {
+        "noExplicitAny": "error",
+        "noArrayIndexKey": "off",
+        "useIterableCallbackReturn": "off",
+        "noTemplateCurlyInString": "off"
+      },
+      "a11y": {
+        "useKeyWithClickEvents": "off",
+        "useSemanticElements": "off",
+        "useFocusableInteractive": "off",
+        "noStaticElementInteractions": "off",
+        "useAriaPropsSupportedByRole": "off"
+      },
+      "complexity": {
+        "useOptionalChain": "off",
+        "noImportantStyles": "off",
+        "noUselessStringRaw": "off"
+      }
+    }
+  },
+  "files": {
+    "includes": ["**", "!**/node_modules", "!**/dist", "!**/.git", "!**/package.json", "!**/*.svg"]
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
+  }
+}

@@ -1,0 +1,50 @@
+
+.blyrics--line[data-agent="v2"], .blyrics--line[data-agent="v4"], .blyrics--line[data-agent="v6"], .blyrics--line[data-agent="v8"], .blyrics--line[data-agent="v10"], [data-agent="v1"], .blyrics--line[data-agent="v3"], .blyrics--line[data-agent="v5"], .blyrics--line[data-agent="v7"], .blyrics--line[data-agent="v9"] {
+    justify-content: flex-start;
+    text-align: left;
+    transform-origin: left center !important;
+
+    --blyrics-lyric-inactive-color: color(from var(--blyrics-lyric-active-color) display-p3 r g b / 0.3);	
+    --blyrics-glow-color: color(from var(--blyrics-lyric-active-color) display-p3 r g b / 0.8);
+
+}
+
+.blyrics--line[data-agent="v1"] {
+  --blyrics-lyric-active-color: #f0f0f0;
+}
+
+.blyrics--line[data-agent="v2"] {
+  --blyrics-lyric-active-color: #99ccff;
+}
+
+.blyrics--line[data-agent="v3"] {
+  --blyrics-lyric-active-color: #ff99cc;
+}
+
+.blyrics--line[data-agent="v4"] {
+  --blyrics-lyric-active-color: #cc99ff;
+}
+
+.blyrics--line[data-agent="v5"] {
+  --blyrics-lyric-active-color: #ffcc99;
+}
+
+.blyrics--line[data-agent="v6"] {
+  --blyrics-lyric-active-color: #99ffcc;
+}
+
+.blyrics--line[data-agent="v7"] {
+  --blyrics-lyric-active-color: #ccffcc;
+}
+
+.blyrics--line[data-agent="v8"] {
+  --blyrics-lyric-active-color: #ccff99;
+}
+
+.blyrics--line[data-agent="v9"] {
+  --blyrics-lyric-active-color: #ffccff;
+}
+
+.blyrics--line[data-agent="v10"] {
+  --blyrics-lyric-active-color: #ffffcc;
+}
