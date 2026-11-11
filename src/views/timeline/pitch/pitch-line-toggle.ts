@@ -19,13 +19,13 @@ function setPitchLineShown(shown: boolean): void {
   const settings = useSettingsStore.getState();
   if (settings.pitchLine !== "off") lastShownMode = settings.pitchLine;
   settings.set("pitchLine", shown ? lastShownMode : "off");
-  const stems = useSeparationStore.getState().stemUrls;\n  if (shown && (stems.vocals || stems.lead)) noteGuideSignal("timeline.pitch");
+  const stems = useSeparationStore.getState().stemUrls;\n  if (shown && (stems.vocals || stems.lead || stems.backing)) noteGuideSignal("timeline.pitch");
 }
 
 function togglePitchLine(): void {
   const show = useSettingsStore.getState().pitchLine === "off";
   setPitchLineShown(show);
-  const stems = useSeparationStore.getState().stemUrls;\n  if (show && !stems.vocals && !stems.lead) {
+  const stems = useSeparationStore.getState().stemUrls;\n  if (show && !stems.vocals && !stems.lead && !stems.backing) {
     toast("The pitch line needs separated vocals", {
       id: NEEDS_VOCALS_TOAST_ID,
       description: "Separate vocals in the Stem menu and it appears in each word.",
