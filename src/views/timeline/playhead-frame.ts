@@ -45,6 +45,9 @@ interface PlayheadFrame {
   scrollLeft: number;
   contentHeight: number;
   blocks: HTMLElement[];
+  blocksContainer: HTMLElement | null;
+  blocksDirty: boolean;
+  blocksObserver: MutationObserver | null;
   lines: readonly LyricLine[];
   mask: string | null;
 }
@@ -70,9 +73,39 @@ function createPlayheadFrame(): PlayheadFrame {
     scrollLeft: 0,
     contentHeight: 0,
     blocks: [],
+    blocksContainer: null,
+    blocksDirty: true,
+    blocksObserver: null,
     lines: [],
     mask: null,
   };
+}
+
+function refreshWordBlocks(frame: PlayheadFrame, container: HTMLElement): void {
+  if (frame.blocksContainer !== container) {
+    frame.blocksObserver?.disconnect();
+    frame.blocksContainer = container;
+    frame.blocksDirty = true;
+    frame.blocksObserver = new MutationObserver(() => {
+      frame.blocksDirty = true;
+    });
+    // The word-block nodes are stable between edits and virtualized row changes.
+    // Observe only structural changes and timing attributes instead of querying the
+    // entire timeline DOM on every animation frame.
+    frame.blocksObserver.observe(container, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["data-word-block", "data-begin"],
+    });
+  }
+
+  if (!frame.blocksDirty) return;
+  frame.blocks.length = 0;
+  for (const block of container.querySelectorAll<HTMLElement>("[data-word-block][data-begin]")) {
+    frame.blocks.push(block);
+  }
+  frame.blocksDirty = false;
 }
 
 function followPlayback(frame: PlayheadFrame, container: HTMLDivElement, currentTime: number, zoom: number): void {
@@ -122,14 +155,11 @@ function readPlayheadFrame(frame: PlayheadFrame, elements: PlayheadElements): vo
   const actualScrollLeft = container ? readViewScroll(container).left : viewScrollLeft();
   frame.position = timeToX(frame.displayTime, zoom, actualScrollLeft) - 1;
 
-  frame.blocks.length = 0;
   if (container) {
     frame.contentHeight = container.scrollHeight;
     frame.scrollLeft = actualScrollLeft;
     frame.lines = useProjectStore.getState().lines;
-    for (const block of container.querySelectorAll<HTMLElement>("[data-word-block][data-begin]")) {
-      frame.blocks.push(block);
-    }
+    refreshWordBlocks(frame, container);
   }
 
   frame.mask = null;
