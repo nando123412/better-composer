@@ -229,6 +229,15 @@ Auto-align uses HubertFA v0.0.7 by default. To try other checkpoints with the sa
 - The manifest is fetched once per page load, without caching. Upload it with `Cache-Control: no-cache` so the edge doesn't keep a stale copy. `./scripts/upload-hubertfa.sh` does this when `hubertfa-models.json` is in its assets folder.
 - To test checkpoints on your machine without uploading them, serve a folder holding the manifest and models with CORS enabled (for example `npx serve --cors -l 8787 ./checkpoints`), set `VITE_ALIGNMENT_MODEL_MANIFEST_URL=http://localhost:8787/hubertfa-models.json` in `.env.local`, and restart `pnpm dev`.
 
+## Known issues
+
+The following issues have been reported and still need investigation. Their root causes are currently unknown:
+
+- **Audio playback can fall behind:** During some sessions, audio playback appears to lag or become out of sync. The cause and exact reproduction steps are not yet known.
+- **Timeline stutters when the spectrum is open:** The Timeline can become noticeably less smooth while the spectrum visualization is enabled. Investigate rendering and performance interactions between the two.
+- **Some themes fail to import:** Importing certain themes produces an invalid-import error, while other themes import successfully. The failing theme format or condition has not yet been identified.
+
+
 ## Tech stack
 
 React, TypeScript, Vite, Tailwind CSS v4, Zustand, Motion, Vitest
