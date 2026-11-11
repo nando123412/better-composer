@@ -9,7 +9,7 @@ import { IconChartLine } from "@tabler/icons-react";
 
 const PitchLineSwitch: React.FC = () => {
   const shown = useSettingsStore((s) => s.pitchLine !== "off");
-  const hasVocals = useSeparationStore((s) => s.availableStems.includes("vocals") || s.availableStems.includes("lead"));
+  const hasVocals = useSeparationStore((s) => s.availableStems.includes("vocals") || s.availableStems.includes("lead") || s.availableStems.includes("backing"));
   const label = settingEntry("pitchLine").label;
 
   return (
